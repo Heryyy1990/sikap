@@ -4,8 +4,8 @@ Orchestrator utama: menggabungkan LLM dan Embedding dalam pipeline klasifikasi.
 import streamlit as st
 import pandas as pd
 from src.llm_handler import extract_surat_inti, classify_primary_secondary, verify_final_code
-from src.embedding_handler import encode_text, search_by_parent
-from src.metadata_handler import get_code_info, get_children, load_faiss_index, get_code_tree_html
+from src.embedding_handler import encode_text, search_by_parent, load_faiss_index
+from src.metadata_handler import get_code_info, get_children, get_code_tree_html
 from src.config import TOP_K_OUTPUT, SIMILARITY_THRESHOLD
 
 def run_classification_pipeline(teks_surat: str, df: pd.DataFrame) -> dict:
