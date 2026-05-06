@@ -4,7 +4,7 @@ Semua konstanta dan mapping terpusat di sini.
 """
 
 # Model & API
-GEMINI_MODEL = "gemini-2.0-flash"  # Flash 2.5 tersedia, pakai flash untuk kecepatan
+GEMINI_MODEL = "gemini-2.5-flash"  # Flash 2.5 tersedia, pakai flash untuk kecepatan
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384  # Dimensi output MiniLM
 
