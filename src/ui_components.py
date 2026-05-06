@@ -37,8 +37,12 @@ def render_inti_surat(inti: str):
 def render_recommendations(recommendations: list, df: pd.DataFrame, 
                           primer: str, sekunder: str, verification: dict = None):
     """Render 3 rekomendasi terbaik dengan detail."""
-    st.markdown("---")
-    st.markdown("### 📊 Hasil Klasifikasi")
+    sim_value = rec.get('similarity', 0.0)  # default 0 jika tidak ada
+    st.markdown(f"""
+        ...
+        Similarity: <b>{sim_value:.2%}</b>
+        ...
+    """, unsafe_allow_html=True)
     
     # Tampilkan primer & sekunder yang terpilih
     if primer and sekunder:
