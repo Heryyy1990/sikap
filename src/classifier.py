@@ -93,38 +93,25 @@ def run_classification_pipeline(teks_surat: str, df: pd.DataFrame) -> dict:
 
     # 5. SUSUN REKOMENDASI
     final_list = []
-    if kuartier_terpilih:
-        info = get_code_info(df, kuartier_terpilih)
+    
+    def add_info(kode, similarity=0.85):
+        info = get_code_info(df, kode)
         if info:
-            info['similarity'] = 0.95  # karena dipilih langsung oleh Gemini
+            info['similarity'] = similarity
             final_list.append(info)
-        # Tambahkan beberapa kuartier lain sebagai alternatif
+    
+    if kuartier_terpilih:
+        add_info(kuartier_terpilih, similarity=0.95)
+        # Tambahkan 2 kuartier lain sebagai alternatif
         other_kuartier = children_l4[children_l4['kode'] != kuartier_terpilih]
         for _, row in other_kuartier.head(2).iterrows():
-            final_list.append({
-                'kode': row['kode'],
-                'uraian': row['uraian'],
-                'penjelasan': row.get('penjelasan',''),
-                'similarity': 0.80,
-                'level': row['level'],
-            })
+            add_info(row['kode'], similarity=0.80)
     else:
-        # Tidak ada kuartier, tampilkan tersier + beberapa tetangganya
-        info_tersier = get_code_info(df, tersier_code)
-        if info_tersier:
-            info_tersier['similarity'] = 0.95
-            final_list.append(info_tersier)
-        # Tambahkan tersier lain dari sekunder yang sama sebagai alternatif
+        # Fallback ke tersier
+        add_info(tersier_code, similarity=0.90)
         other_tersier = children_l3[children_l3['kode'] != tersier_code]
         for _, row in other_tersier.head(2).iterrows():
-            final_list.append({
-                'kode': row['kode'],
-                'uraian': row['uraian'],
-                'penjelasan': row.get('penjelasan',''),
-                'similarity': 0.75,
-                'level': row['level'],
-            })
+            add_info(row['kode'], similarity=0.75)
 
     results['final_recommendations'] = final_list[:TOP_K_OUTPUT]
-
     return results
