@@ -4,9 +4,10 @@ Menggunakan Google GenAI SDK dengan Gemini Flash 2.0.
 """
 import json
 import re
+import time
 import streamlit as st
 import google.generativeai as genai
-from src.config import GEMINI_MODEL, PRIMER_CODES, PRIMER_NAMES
+from src.config import GEMINI_MODEL
 
 def _get_client():
     """Initialize Gemini client dengan API key dari secrets."""
@@ -16,6 +17,21 @@ def _get_client():
         st.stop()
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(GEMINI_MODEL)
+
+def safe_generate(model, prompt, retries=3):
+    """Panggil Gemini dengan retry dan backoff."""
+    for attempt in range(retries):
+        try:
+            response = model.generate_content(prompt)
+            return response
+        except Exception as e:
+            if "429" in str(e):
+                wait = 15 * (attempt + 1)
+                st.warning(f"Rate limit. Menunggu {wait} detik...")
+                time.sleep(wait)
+            else:
+                raise e
+    return None
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def extract_surat_inti(teks_surat: str) -> str:
@@ -33,15 +49,16 @@ SURAT:
 
 INTI SURAT:"""
     
-    response = model.generate_content(prompt)
-    return response.text.strip()
+    response = safe_generate(model, prompt)
+    if response:
+        return response.text.strip()
+    return "Gagal mengekstrak inti surat."
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def classify_primary_secondary(inti_surat: str, df_codes: str) -> dict:
     """
     Tahap 2: Tentukan kode PRIMER (level 1) dan SEKUNDER (level 2).
-    Input: inti surat + daftar kode primer & sekunder yang tersedia.
-    Output: dict dengan 'primer' dan 'sekunder'.
+    Prompt dipertegas agar fokus pada TUJUAN UTAMA, bukan kata kunci sekunder.
     """
     model = _get_client()
     prompt = f"""Tugas: Klasifikasikan surat dinas ini ke kode PRIMER (level 1) dan SEKUNDER (level 2) yang PALING TEPAT berdasarkan TUJUAN UTAMA surat.
@@ -49,7 +66,7 @@ def classify_primary_secondary(inti_surat: str, df_codes: str) -> dict:
 INTI SURAT:
 {inti_surat}
 
-PERHATIKAN:
+PENTING:
 - Fokus pada TUJUAN UTAMA surat, bukan kata-kata yang kebetulan muncul.
 - Contoh: jika surat tentang "sertifikasi tanah untuk pembangunan perpustakaan", tujuan utamanya adalah SERTIFIKASI TANAH, maka pilih kode terkait PERTANAHAN, bukan PERPUSTAKAAN.
 - Pilih kode yang PALING SPESIFIK menggambarkan inti permohonan.
@@ -63,86 +80,15 @@ Jika Anda ragu, pilih yang paling mendekati.
 FORMAT JAWABAN (JSON saja, tanpa teks lain):
 {{"primer": "XXX", "sekunder": "XXX.XX", "alasan": "..."}}"""
 
-    response = model.generate_content(prompt)
+    response = safe_generate(model, prompt)
+    if not response:
+        return {"primer": "500", "sekunder": "500.17", "alasan": "Gagal memanggil Gemini, fallback ke pertanahan"}
+
     text = response.text.strip()
-    
-    # Parse JSON dari response
-    try:
-        # Bersihkan markdown code blocks
-        json_match = re.search(r'\{.*\}', text, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group())
-        else:
-            return {"primer": "000", "sekunder": "000.1", "alasan": "Gagal parse"}
-    except json.JSONDecodeError:
-        return {"primer": "000", "sekunder": "000.1", "alasan": "Gagal parse"}
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def pick_best_level(inti_surat: str, candidates: list, level_name: str) -> dict:
-    """
-    Minta Gemini memilih satu kode terbaik dari daftar kandidat.
-    candidates: list of dict dengan key 'kode', 'uraian', 'penjelasan'
-    """
-    if not candidates:
-        return {"kode": None, "alasan": "Tidak ada kandidat"}
-    
-    # Bangun daftar kandidat dalam teks
-    cand_text = ""
-    for i, c in enumerate(candidates):
-        cand_text += f"\n{i+1}. Kode: {c['kode']}\n   Uraian: {c['uraian']}\n   Penjelasan: {c.get('penjelasan','')[:300]}\n"
-    
-    model = _get_client()
-    prompt = f"""Tugas: Pilih SATU kode {level_name} yang paling tepat untuk surat ini.
-
-INTI SURAT:
-{inti_surat}
-
-KANDIDAT KODE:
-{cand_text}
-
-Pilih satu nomor kandidat. Berikan alasan singkat.
-Format JSON:
-{{"kode_terpilih": "XXX.XX", "alasan": "..."}}"""
-
-    response = model.generate_content(prompt)
-    text = response.text.strip()
-    
     try:
         json_match = re.search(r'\{.*\}', text, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
     except json.JSONDecodeError:
         pass
-    return {"kode": None, "alasan": "Gagal parse"}
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def verify_final_code(inti_surat: str, candidates: str) -> dict:
-    """
-    Tahap Verifikasi: Gemini memeriksa apakah kode kuartier terbaik sudah tepat.
-    Input: inti surat + 3 kandidat (dengan uraian & penjelasan).
-    Output: dict dengan 'kode_terpilih', 'confidence', 'alasan'.
-    """
-    model = _get_client()
-    prompt = f"""Tugas: Anda adalah arsiparis senior. Verifikasi kode klasifikasi terbaik untuk surat ini.
-
-INTI SURAT:
-{inti_surat}
-
-KANDIDAT KODE:
-{candidates}
-
-Pilih SATU kode terbaik. Berikan CONFIDENCE score 0-100.
-Format JSON:
-{{"kode_terpilih": "XXX.XX", "confidence": 85, "alasan": "..."}}"""
-
-    response = model.generate_content(prompt)
-    text = response.text.strip()
-    
-    try:
-        json_match = re.search(r'\{.*\}', text, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group())
-        else:
-            return {"kode_terpilih": None, "confidence": 0, "alasan": "Gagal parse"}
-    except json.JSONDecodeError:
-        return {"kode_terpilih": None, "confidence": 0, "alasan": "Gagal parse"}
+    return {"primer": "500", "sekunder": "500.17", "alasan": "Gagal parse, fallback ke pertanahan"}
