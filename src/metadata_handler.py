@@ -14,6 +14,8 @@ def load_metadata() -> pd.DataFrame:
     """Load metadata DataFrame dari file pickle."""
     with open(DATA_DIR / "metadata_sikap.pkl", "rb") as f:
         df = pickle.load(f)
+    # PASTIKAN LEVEL BERTIPE INTEGER
+    df['level'] = df['level'].astype(int)
     return df
 
 @st.cache_resource
