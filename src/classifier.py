@@ -1,152 +1,130 @@
 """
-Orchestrator utama: menggabungkan LLM dan Embedding dalam pipeline klasifikasi.
+Orchestrator utama: pipeline full Gemini (tanpa FAISS/embedding).
 """
 import streamlit as st
 import pandas as pd
-from src.llm_handler import extract_surat_inti, classify_primary_secondary, verify_final_code
-from src.embedding_handler import encode_text, search_by_parent, load_faiss_index
+from src.llm_handler import (
+    extract_surat_inti,
+    classify_primary_secondary,
+    pick_best_level,
+    verify_final_code,
+)
 from src.metadata_handler import get_code_info, get_children, get_code_tree_html
 from src.config import TOP_K_OUTPUT, SIMILARITY_THRESHOLD
 
+
 def run_classification_pipeline(teks_surat: str, df: pd.DataFrame) -> dict:
-    """
-    Menjalankan pipeline klasifikasi lengkap.
-    
-    Returns:
-        dict dengan semua hasil untuk ditampilkan di UI.
-    """
     results = {
         'inti_surat': '',
         'primer': None,
         'sekunder': None,
-        'tersier_candidates': [],
-        'kuartier_candidates': [],
+        'tersier_terpilih': None,
+        'kuartier_terpilih': None,
         'final_recommendations': [],
-        'gemini_verification': None,
-        'error': None
+        'alasan_ps': '',
+        'alasan_tersier': '',
+        'alasan_kuartier': '',
+        'error': None,
     }
-    
-    # =====================================================================
-    # TAHAP 1: Ekstrak Inti Surat (Gemini)
-    # =====================================================================
+
+    # 1. INTI SURAT
     with st.spinner("🧠 Mengekstrak inti surat..."):
         try:
             inti_surat = extract_surat_inti(teks_surat)
             results['inti_surat'] = inti_surat
         except Exception as e:
-            results['error'] = f"Gagal ekstrak inti: {str(e)}"
+            results['error'] = f"Gagal ekstrak inti: {e}"
             return results
-    
-    # =====================================================================
-    # TAHAP 2: Klasifikasi Primer + Sekunder (Gemini)
-    # =====================================================================
-    with st.spinner("📂 Menentukan kode primer & sekunder..."):
+
+    # 2. PRIMER + SEKUNDER
+    with st.spinner("📂 Menentukan primer & sekunder..."):
         try:
-            # Siapkan daftar kode level 1 & 2 untuk prompt
             level1_codes = df[df['level'] == 1][['kode', 'uraian']].to_dict('records')
-            level2_summary = df[df['level'] == 2][['kode', 'uraian']].to_dict('records')
-            
-            code_list = "PRIMER (level 1):\n"
-            for c in level1_codes:
-                code_list += f"- {c['kode']}: {c['uraian']}\n"
-            code_list += "\nSEKUNDER (level 2) yang tersedia:\n"
-            for c in level2_summary[:50]:  # Batasi agar prompt tidak terlalu panjang
-                code_list += f"- {c['kode']}: {c['uraian']}\n"
-            
-            ps_result = classify_primary_secondary(inti_surat, code_list)
-            results['primer'] = ps_result.get('primer')
-            results['sekunder'] = ps_result.get('sekunder')
-            results['alasan_ps'] = ps_result.get('alasan', '')
+            level2_codes = df[df['level'] == 2][['kode', 'uraian']].to_dict('records')
+            code_list = "PRIMER:\n" + "\n".join([f"- {c['kode']}: {c['uraian']}" for c in level1_codes])
+            code_list += "\n\nSEKUNDER (contoh 30 pertama):\n" + "\n".join([f"- {c['kode']}: {c['uraian']}" for c in level2_codes[:30]])
+            ps = classify_primary_secondary(inti_surat, code_list)
+            results['primer'] = ps.get('primer')
+            results['sekunder'] = ps.get('sekunder')
+            results['alasan_ps'] = ps.get('alasan', '')
         except Exception as e:
-            results['error'] = f"Gagal klasifikasi primer/sekunder: {str(e)}"
+            results['error'] = f"Gagal primer/sekunder: {e}"
             return results
-    
-    # =====================================================================
-    # TAHAP 3: Cari Tersier (FAISS + MiniLM)
-    # =====================================================================
-    with st.spinner("🔍 Mencari kode tersier..."):
-        try:
-            query_vec = encode_text(inti_surat)
-            tersier_results = search_by_parent(
-                df, query_vec, 
-                parent_code=results['sekunder'], 
-                level=3, 
-                top_k=5
-            )
-            results['tersier_candidates'] = tersier_results
-        except Exception as e:
-            results['error'] = f"Gagal cari tersier: {str(e)}"
-            return results
-    
-    # =====================================================================
-    # TAHAP 4: Cari Kuartier (FAISS + MiniLM) dari Tersier terbaik
-    # =====================================================================
-    with st.spinner("🎯 Mencari kode kuartier..."):
-        try:
-            kuartier_all = []
-            # Untuk setiap kandidat tersier, cari kuartier-nya
-            for tersier in tersier_results[:3]:  # Top-3 tersier
-                kuartier = search_by_parent(
-                    df, query_vec,
-                    parent_code=tersier['kode'],
-                    level=4,
-                    top_k=3
-                )
-                for k in kuartier:
-                    k['tersier_parent'] = tersier['kode']
-                kuartier_all.extend(kuartier)
-            
-            # Urutkan kuartier berdasarkan similarity
-            kuartier_all.sort(key=lambda x: x['similarity'], reverse=True)
-            results['kuartier_candidates'] = kuartier_all
-        except Exception as e:
-            # Fallback: tidak ada kuartier, gunakan tersier
-            results['kuartier_candidates'] = []
-    
-    # =====================================================================
-    # TAHAP 5: Susun Rekomendasi & Verifikasi
-    # =====================================================================
-    with st.spinner("✅ Menyusun rekomendasi akhir..."):
-        final_candidates = []
-        
-        if results['kuartier_candidates']:
-            # Prioritaskan kuartier dengan similarity tinggi
-            high_sim = [k for k in results['kuartier_candidates'] if k['similarity'] >= SIMILARITY_THRESHOLD]
-            if len(high_sim) >= TOP_K_OUTPUT:
-                final_candidates = high_sim[:TOP_K_OUTPUT]
-            else:
-                # Campur kuartier + tersier
-                final_candidates = high_sim
-                remaining = TOP_K_OUTPUT - len(final_candidates)
-                for t in results['tersier_candidates']:
-                    if remaining <= 0:
-                        break
-                    if t not in final_candidates:
-                        final_candidates.append(t)
-                        remaining -= 1
-        else:
-            # Fallback ke tersier
-            final_candidates = results['tersier_candidates'][:TOP_K_OUTPUT]
-        
-        results['final_recommendations'] = final_candidates
-    
-    # =====================================================================
-    # TAHAP 6: Verifikasi Gemini (opsional, jika confidence rendah)
-    # =====================================================================
-    if results['final_recommendations'] and len(results['final_recommendations']) > 0:
-        top_sim = results['final_recommendations'][0]['similarity']
-        if top_sim < 0.60:  # Threshold untuk trigger verifikasi
-            with st.spinner("🤖 Gemini memverifikasi hasil..."):
-                try:
-                    # Siapkan kandidat untuk prompt
-                    cand_text = ""
-                    for i, c in enumerate(results['final_recommendations'][:3]):
-                        info = get_code_info(df, c['kode'])
-                        cand_text += f"\n{i+1}) KODE: {c['kode']}\n   URAIAN: {info['uraian'] if info else '?'}\n   PENJELASAN: {info['penjelasan'][:200] if info else '?'}\n"
-                    
-                    verification = verify_final_code(inti_surat, cand_text)
-                    results['gemini_verification'] = verification
-                except Exception:
-                    pass  # Verifikasi gagal tidak masalah
-    
+
+    sekunder_code = results['sekunder']
+    if not sekunder_code:
+        results['error'] = "Sekunder tidak ditemukan"
+        return results
+
+    # 3. PILIH TERSIER (Level 3)
+    with st.spinner("🔍 Memilih kode tersier..."):
+        children_l3 = get_children(df, sekunder_code, level=3)
+        if not children_l3.empty:
+            candidates_l3 = children_l3[['kode','uraian','penjelasan']].to_dict('records')
+            try:
+                ter_pick = pick_best_level(inti_surat, candidates_l3, "Tersier")
+                if ter_pick.get('kode'):
+                    results['tersier_terpilih'] = ter_pick['kode']
+                    results['alasan_tersier'] = ter_pick.get('alasan', '')
+            except Exception as e:
+                results['error'] = f"Gagal pilih tersier: {e}"
+                # Fallback: gunakan tersier pertama
+                results['tersier_terpilih'] = children_l3.iloc[0]['kode']
+
+    tersier_code = results['tersier_terpilih']
+    if not tersier_code:
+        # Fallback: langsung gunakan sekunder sebagai rekomendasi
+        results['final_recommendations'] = [get_code_info(df, sekunder_code)]
+        return results
+
+    # 4. PILIH KUARTIER (Level 4)
+    kuartier_terpilih = None
+    children_l4 = get_children(df, tersier_code, level=4)
+    if not children_l4.empty:
+        with st.spinner("🎯 Memilih kode kuartier..."):
+            candidates_l4 = children_l4[['kode','uraian','penjelasan']].to_dict('records')
+            try:
+                kua_pick = pick_best_level(inti_surat, candidates_l4, "Kuartier")
+                if kua_pick.get('kode'):
+                    kuartier_terpilih = kua_pick['kode']
+                    results['alasan_kuartier'] = kua_pick.get('alasan', '')
+            except Exception:
+                pass
+
+    # 5. SUSUN REKOMENDASI
+    final_list = []
+    if kuartier_terpilih:
+        info = get_code_info(df, kuartier_terpilih)
+        if info:
+            info['similarity'] = 0.95  # karena dipilih langsung oleh Gemini
+            final_list.append(info)
+        # Tambahkan beberapa kuartier lain sebagai alternatif
+        other_kuartier = children_l4[children_l4['kode'] != kuartier_terpilih]
+        for _, row in other_kuartier.head(2).iterrows():
+            final_list.append({
+                'kode': row['kode'],
+                'uraian': row['uraian'],
+                'penjelasan': row.get('penjelasan',''),
+                'similarity': 0.80,
+                'level': row['level'],
+            })
+    else:
+        # Tidak ada kuartier, tampilkan tersier + beberapa tetangganya
+        info_tersier = get_code_info(df, tersier_code)
+        if info_tersier:
+            info_tersier['similarity'] = 0.95
+            final_list.append(info_tersier)
+        # Tambahkan tersier lain dari sekunder yang sama sebagai alternatif
+        other_tersier = children_l3[children_l3['kode'] != tersier_code]
+        for _, row in other_tersier.head(2).iterrows():
+            final_list.append({
+                'kode': row['kode'],
+                'uraian': row['uraian'],
+                'penjelasan': row.get('penjelasan',''),
+                'similarity': 0.75,
+                'level': row['level'],
+            })
+
+    results['final_recommendations'] = final_list[:TOP_K_OUTPUT]
+
     return results
