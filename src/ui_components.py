@@ -37,14 +37,10 @@ def render_inti_surat(inti: str):
 def render_recommendations(recommendations: list, df: pd.DataFrame, 
                           primer: str, sekunder: str, verification: dict = None):
     """Render 3 rekomendasi terbaik dengan detail."""
-    sim_value = rec.get('similarity', 0.0)  # default 0 jika tidak ada
-    st.markdown(f"""
-        ...
-        Similarity: <b>{sim_value:.2%}</b>
-        ...
-    """, unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("### 📊 Hasil Klasifikasi")
     
-    # Tampilkan primer & sekunder yang terpilih
+    # Tampilkan primer & sekunder
     if primer and sekunder:
         p_info = get_code_info(df, primer)
         s_info = get_code_info(df, sekunder)
@@ -54,9 +50,9 @@ def render_recommendations(recommendations: list, df: pd.DataFrame,
         with col_s:
             st.metric("Kode Sekunder", sekunder, delta=s_info['uraian'] if s_info else "")
     
-    # Verifikasi Gemini
+    # Verifikasi (jika ada)
     if verification and verification.get('kode_terpilih'):
-        st.success(f"✅ Gemini memverifikasi: **{verification['kode_terpilih']}** (confidence: {verification['confidence']}%)")
+        st.success(f"✅ Gemini memverifikasi: **{verification['kode_terpilih']}** (confidence: {verification.get('confidence', '?')}%)")
         if verification.get('alasan'):
             st.caption(f"*Alasan:* {verification['alasan']}")
     
@@ -69,50 +65,51 @@ def render_recommendations(recommendations: list, df: pd.DataFrame,
     
     cols = st.columns(len(recommendations))
     
-    for i, (col, rec) in enumerate(zip(cols, recommendations)):
+    for i, col in enumerate(cols):
+        rec = recommendations[i]
+        # Ambil nilai similarity, fallback ke 0.0
+        sim_value = float(rec.get('similarity', 0.0))
+        
+        # Warna border berdasarkan peringkat
+        border_color = ["#4CAF50", "#2196F3", "#FF9800"][i] if i < 3 else "#9E9E9E"
+        rank_emoji = ["🥇", "🥈", "🥉"][i] if i < 3 else "📌"
+        
         with col:
-            # Determine border color based on rank
-            border_color = ["#4CAF50", "#2196F3", "#FF9800"][i] if i < 3 else "#9E9E9E"
-            rank_emoji = ["🥇", "🥈", "🥉"][i] if i < 3 else "📌"
-            
             st.markdown(f"""
             <div style="border: 2px solid {border_color}; border-radius: 12px; padding: 16px; height: 100%;">
                 <h2 style="margin: 0 0 8px 0;">{rank_emoji} #{i+1}</h2>
-                <h3 style="color: {border_color}; margin: 0 0 12px 0; font-family: monospace; font-size: 1.2em;">{rec['kode']}</h3>
-                <p style="font-weight: bold; margin: 0 0 8px 0;">{rec['uraian']}</p>
-                <div style="font-size: 0.85em; color: #666; margin-bottom: 12px;">{rec.get('penjelasan', '')[:150]}...</div>
+                <h3 style="color: {border_color}; margin: 0 0 12px 0; font-family: monospace; font-size: 1.2em;">{rec.get('kode', '?')}</h3>
+                <p style="font-weight: bold; margin: 0 0 8px 0;">{rec.get('uraian', '?')}</p>
+                <div style="font-size: 0.85em; color: #666; margin-bottom: 12px;">{str(rec.get('penjelasan', ''))[:150]}...</div>
                 <div style="background: #f0f0f0; border-radius: 8px; padding: 4px 12px;">
-                    Similarity: <b>{rec['similarity']:.2%}</b>
+                    Similarity: <b>{sim_value:.2%}</b>
                 </div>
             </div>
             """, unsafe_allow_html=True)
     
-    # Tampilkan detail tree
+    # Tree hierarki
     with st.expander("🌳 Lihat Hierarki Kode", expanded=False):
         for rec in recommendations[:3]:
-            st.markdown(f"**{rec['kode']}** — {rec['uraian']}")
-            st.markdown(get_code_tree_html(df, rec['kode']), unsafe_allow_html=True)
+            st.markdown(f"**{rec.get('kode','?')}** — {rec.get('uraian','?')}")
+            tree_html = get_code_tree_html(df, rec.get('kode',''))
+            if tree_html:
+                st.markdown(tree_html, unsafe_allow_html=True)
             st.markdown("---")
-    
-    # Tampilkan penjelasan Gemini
-    if verification and verification.get('alasan'):
-        with st.expander("💬 Penjelasan Gemini", expanded=True):
-            st.markdown(verification['alasan'])
 
 def render_sidebar_info(df: pd.DataFrame):
     """Render informasi di sidebar."""
     with st.sidebar:
         st.markdown("## ℹ️ Tentang SIKAP")
-        st.markdown("""
+        st.markdown(f"""
         **SIKAP** adalah sistem klasifikasi arsip cerdas yang menggabungkan:
         - 🧠 **Gemini Flash** untuk reasoning
-        - 🔢 **Embedding + FAISS** untuk vector search
+        - 🔢 **MiniLM + FAISS** untuk vector search
         - 🌳 **Hierarchical Classification** untuk akurasi tinggi
         
-        **Dataset:** {} kode klasifikasi
+        **Dataset:** {len(df)} kode klasifikasi
         
         **Metode:** Hybrid LLM + Embedding
-        """.format(len(df)))
+        """)
         
         st.markdown("---")
         st.markdown("### 📋 Statistik Dataset")
