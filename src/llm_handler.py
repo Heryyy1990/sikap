@@ -44,10 +44,15 @@ def classify_primary_secondary(inti_surat: str, df_codes: str) -> dict:
     Output: dict dengan 'primer' dan 'sekunder'.
     """
     model = _get_client()
-    prompt = f"""Tugas: Klasifikasikan surat dinas ini ke kode PRIMER dan SEKUNDER.
+    prompt = f"""Tugas: Klasifikasikan surat dinas ini ke kode PRIMER (level 1) dan SEKUNDER (level 2) yang PALING TEPAT berdasarkan TUJUAN UTAMA surat.
 
 INTI SURAT:
 {inti_surat}
+
+PERHATIKAN:
+- Fokus pada TUJUAN UTAMA surat, bukan kata-kata yang kebetulan muncul.
+- Contoh: jika surat tentang "sertifikasi tanah untuk pembangunan perpustakaan", tujuan utamanya adalah SERTIFIKASI TANAH, maka pilih kode terkait PERTANAHAN, bukan PERPUSTAKAAN.
+- Pilih kode yang PALING SPESIFIK menggambarkan inti permohonan.
 
 PILIH KODE PRIMER (level 1) dari daftar:
 {df_codes}
