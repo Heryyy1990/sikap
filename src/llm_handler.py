@@ -73,6 +73,44 @@ FORMAT JAWABAN (JSON saja, tanpa teks lain):
         return {"primer": "000", "sekunder": "000.1", "alasan": "Gagal parse"}
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def pick_best_level(inti_surat: str, candidates: list, level_name: str) -> dict:
+    """
+    Minta Gemini memilih satu kode terbaik dari daftar kandidat.
+    candidates: list of dict dengan key 'kode', 'uraian', 'penjelasan'
+    """
+    if not candidates:
+        return {"kode": None, "alasan": "Tidak ada kandidat"}
+    
+    # Bangun daftar kandidat dalam teks
+    cand_text = ""
+    for i, c in enumerate(candidates):
+        cand_text += f"\n{i+1}. Kode: {c['kode']}\n   Uraian: {c['uraian']}\n   Penjelasan: {c.get('penjelasan','')[:300]}\n"
+    
+    model = _get_client()
+    prompt = f"""Tugas: Pilih SATU kode {level_name} yang paling tepat untuk surat ini.
+
+INTI SURAT:
+{inti_surat}
+
+KANDIDAT KODE:
+{cand_text}
+
+Pilih satu nomor kandidat. Berikan alasan singkat.
+Format JSON:
+{{"kode_terpilih": "XXX.XX", "alasan": "..."}}"""
+
+    response = model.generate_content(prompt)
+    text = response.text.strip()
+    
+    try:
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+    except json.JSONDecodeError:
+        pass
+    return {"kode": None, "alasan": "Gagal parse"}
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def verify_final_code(inti_surat: str, candidates: str) -> dict:
     """
     Tahap Verifikasi: Gemini memeriksa apakah kode kuartier terbaik sudah tepat.
